@@ -9,19 +9,45 @@ namespace FarFutureTechnologies
     [KSPAddon(KSPAddon.Startup.EveryScene, false)]
     public class AntimatterFactory : MonoBehaviour
     {
-        public static AntimatterFactory Instance { get; private set; }
+        private static AntimatterFactory instance;
+        public static AntimatterFactory Instance
+        {
+            get
+            {
+                if (instance == null)
+                {
+                    instance = FindObjectOfType<AntimatterFactory>();
+                    if (instance == null)
+                    {
+                        GameObject obj = new GameObject();
+                        instance = obj.AddComponent<AntimatterFactory>();
+                    }
+                }
+                return instance;
+            }
+        }
 
         public int FactoryLevel { get { return factoryLevel; } }
         public bool Researched { get { return researched; } }
-        public double Antimatter { get { return curAntimatter; } }
+        public bool Infinite { get { return infinite; } set {infinite = value;}}
+        public double Antimatter {
+          get {
+            if (Infinite)
+              return AntimatterMax;
+            return curAntimatter;
+            } }
         public double AntimatterRate { get { return curAntimatterRate; } }
         public double AntimatterMax { get { return maxAntimatter; } }
         public double DeferredAntimatterAmount { get { return deferredAntimatterAmount; } }
+        public bool FirstLoad { get { return firstLoad; } set { firstLoad = value; } }
 
         private bool productionOn = false;
         private bool researched = false;
+        private bool infinite = false;
 
         private int factoryLevel = 0;
+
+        private bool firstLoad = true;
 
         private double curAntimatter = 0d;
         private double maxAntimatter = 0d;
@@ -69,25 +95,46 @@ namespace FarFutureTechnologies
         }
         void Awake()
         {
-            Instance = this;
+            if (instance == null)
+            {
+                instance = this;
+            }
         }
 
         private void Start()
         {
-            double worldTime = Planetarium.GetUniversalTime();
-
-            if (worldTime - lastUpdateTime > 0d)
+            if (HighLogic.LoadedSceneIsGame)
             {
-                Utils.Log(String.Format("Delta time of {0} detected, catching up", worldTime-lastUpdateTime));
-                // update storage to reflect delta
-                //CatchupProduction(worldTime - lastUpdateTime);
-                lastUpdateTime = worldTime;
+                double worldTime = Planetarium.GetUniversalTime();
+                //GameEvents.OnVesselRollout.Add(new EventData<ShipConstruct>.OnEvent(OnVesselRollout));
+                if (worldTime - lastUpdateTime > 0d)
+                {
+                    Utils.Log(String.Format("[AntimatteryFactory]: Delta time of {0} seconds detected, catching up", worldTime - lastUpdateTime));
+                    // update storage to reflect delta
+                    //CatchupProduction(worldTime - lastUpdateTime);
+                    lastUpdateTime = worldTime;
+                }
             }
-            
+
         }
 
-        public void Initialize(int loadedLevel, double loadedStorage, double deferredConsumption)
+        void OnVesselRollout(ShipConstruct ship)
         {
+          int id = PartResourceLibrary.Instance.GetDefinition("Antimatter").id;
+          for (int i = 0; i < ship.Parts.Count; i++)
+          {
+            PartResource res =  ship.Parts[i].Resources.Get(id);
+            if (res != null)
+            {
+                res.maxAmount = 0d;
+            }
+
+          }
+        }
+
+        public void Initialize(int loadedLevel, double loadedStorage, double deferredConsumption, bool firstLoadWithAM)
+        {
+            firstLoad = firstLoadWithAM;
             factoryLevel = loadedLevel;
             curAntimatter = loadedStorage;
             deferredAntimatterAmount = deferredConsumption;
@@ -95,7 +142,7 @@ namespace FarFutureTechnologies
             // If game mode is sandbox, set the level to max immediately and begin production
             if (HighLogic.CurrentGame.Mode == Game.Modes.SANDBOX)
             {
-                Utils.Log("Detected Sandbox, setting AM factory to max and activating");
+                Utils.Log("AntimatteryFactory]: Detected Sandbox, setting AM factory to max level and activating");
                 researched = true;
                 factoryLevel = FarFutureTechnologySettings.factoryLevels.Count - 1;
                 SetProductionStatus(true);
@@ -103,7 +150,7 @@ namespace FarFutureTechnologies
             // If science sandbox, check for the needed technology first
             else if (HighLogic.CurrentGame.Mode == Game.Modes.SCIENCE_SANDBOX)
             {
-                Utils.Log("Detected Science Sandbox, setting AM factory to max, detecting tech");
+                Utils.Log("AntimatteryFactory]: Detected Science Sandbox, setting AM factory to max level and detecting tech level");
                 bool isResearched = Utils.CheckTechPresence(FarFutureTechnologySettings.antimatterFactoryUnlockTech);
                 if (isResearched)
                 {
@@ -120,7 +167,7 @@ namespace FarFutureTechnologies
             }
             else
             {
-                Utils.Log("Detected Career, setting AM factory to stored level, detecting tech");
+                Utils.Log("AntimatteryFactory]: Detected Career, setting AM factory to stored level and detecting tech level");
                 bool isResearched = Utils.CheckTechPresence(FarFutureTechnologySettings.antimatterFactoryUnlockTech);
                 if (isResearched)
                 {
@@ -135,8 +182,9 @@ namespace FarFutureTechnologies
                 }
             }
 
-            Utils.Log("Completed data load, setting up factory for level "+ factoryLevel.ToString());
+            Utils.Log("AntimatteryFactory]: Completed data load, initializing AM factory for level "+ factoryLevel.ToString());
             curLevelDat =  FarFutureTechnologySettings.GetAMFactoryLevelData(factoryLevel);
+
 
             maxAntimatter = curLevelDat.maxCapacity;
             curAntimatterRate = curLevelDat.baseRate;
@@ -146,11 +194,9 @@ namespace FarFutureTechnologies
                 curAntimatter = maxAntimatter;
             }
 
-            if (HighLogic.LoadedSceneIsFlight && DeferredAntimatterAmount > 0d)
-            {
-                ConsumeAntimatter(deferredAntimatterAmount);
-                deferredAntimatterAmount = 0d;
-            }
+
+
+
         }
 
         public void ScheduleConsumeAntimatter(double amt)
@@ -165,11 +211,12 @@ namespace FarFutureTechnologies
             {
                 curAntimatter = 0d;
             }
-             
+
         }
 
         void CatchupProduction(double elapsed)
         {
+
             curAntimatter = curAntimatter + curAntimatterRate * elapsed;
             if (curAntimatter > maxAntimatter)
             {
@@ -189,14 +236,29 @@ namespace FarFutureTechnologies
 
             if (productionOn)
             {
+
                 curAntimatter = curAntimatter + ConvertRate( curAntimatterRate) * TimeWarp.fixedDeltaTime;
+
                 if (curAntimatter > maxAntimatter)
                 {
                     curAntimatter = maxAntimatter;
                 }
+
             }
         }
-
+        void Update()
+        {
+          if (productionOn)
+          {
+            if ((Input.GetKey(KeyCode.RightControl) || Input.GetKey(KeyCode.LeftControl)) &&
+              (Input.GetKey(KeyCode.RightShift) || Input.GetKey(KeyCode.LeftShift)) &&
+              Input.GetKeyDown(KeyCode.A) )
+              {
+                Infinite = !Infinite;
+              // CTRL + Z
+            }
+          }
+        }
         double ConvertRate(double rateDays)
         {
             double rateSeconds = 0d;
